@@ -36,8 +36,20 @@ CODE_EXTENSIONS = {
     '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.hpp', '.cs',
     '.rb', '.go', '.rs', '.swift', '.kt', '.scala', '.lua', '.pl',
     '.php', '.r', '.m', '.asm', '.s', '.vue', '.jsx', '.tsx', '.svelte',
-    '.sql', '.sh', '.bash', '.json', '.xml', '.yaml', '.yml', '.html',
+    '.sql', '.sh', '.bash', '.json', '.yaml', '.yml',
     '.css', '.toml', '.ini', '.conf', '.cfg', '.env'
+}
+
+IMAGE_EXTENSIONS = {
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.ico', '.webp', '.tiff', '.tif'
+}
+
+VIDEO_EXTENSIONS = {
+    '.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv', '.webm', '.m4v', '.3gp'
+}
+
+BROWSER_EXTENSIONS = {
+    '.html', '.htm', '.xml', '.xhtml'
 }
 
 
@@ -68,8 +80,14 @@ class FileServerHandler(http.server.SimpleHTTPRequestHandler):
             full_path = os.path.normpath(os.path.join(self.root_dir, path.lstrip('/')))
             
             if not full_path.startswith(self.root_dir):
-                self.send_error(403, "Forbidden")
+                self.send_error_page(403, "Forbidden", "您没有权限访问此资源。")
                 return
+            
+            if os.path.islink(full_path):
+                real_path = os.path.realpath(full_path)
+                if not real_path.startswith(os.path.realpath(self.root_dir)):
+                    self.send_error_page(403, "Forbidden", "符号链接指向顶级目录之外，访问被拒绝。")
+                    return
             
             if os.path.isdir(full_path):
                 index_files = ['index.html', 'index.htm', 'index.md']
@@ -85,15 +103,38 @@ class FileServerHandler(http.server.SimpleHTTPRequestHandler):
                 sort_order = query_params.get('order', ['asc'])[0]
                 self.serve_directory_listing(full_path, path, sort_by, sort_order)
             elif os.path.isfile(full_path):
-                ext = os.path.splitext(full_path)[1].lower()
-                if full_path.endswith('.md'):
-                    self.serve_markdown(full_path)
-                elif ext in CODE_EXTENSIONS:
-                    self.serve_code_file(full_path)
+                if 'raw' in query_params:
+                    self.serve_raw_file(full_path)
                 else:
-                    super().do_GET()
+                    ext = os.path.splitext(full_path)[1].lower()
+                    if full_path.endswith('.md'):
+                        self.serve_markdown(full_path)
+                    elif ext in CODE_EXTENSIONS:
+                        self.serve_code_file(full_path)
+                    elif ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS or ext in ['.html', '.htm', '.xml']:
+                        super().do_GET()
+                    elif ext in TEXT_EXTENSIONS:
+                        self.serve_text_file(full_path)
+                    else:
+                        self.serve_unknown_file(full_path)
             else:
-                self.send_error(404, "File not found")
+                self.send_error_page(404, "Not Found", "请求的资源不存在。")
+    
+    def generate_breadcrumb(self, web_path: str) -> str:
+        parts = web_path.strip('/').split('/')
+        breadcrumb_parts = ['<a href="/">🏠 Home</a>']
+        
+        current_path = ''
+        for i, part in enumerate(parts):
+            if not part:
+                continue
+            current_path += '/' + part
+            if i == len(parts) - 1:
+                breadcrumb_parts.append(f'<span class="breadcrumb-current">{html.escape(part)}</span>')
+            else:
+                breadcrumb_parts.append(f'<a href="{html.escape(current_path)}/">{html.escape(part)}</a>')
+        
+        return ' <span class="breadcrumb-separator">/</span> '.join(breadcrumb_parts)
     
     def serve_code_file(self, file_path: str):
         try:
@@ -206,7 +247,7 @@ document.addEventListener('DOMContentLoaded', function() {{
             self.end_headers()
             self.wfile.write(html_content.encode('utf-8'))
         except IOError:
-            self.send_error(404, "File not found")
+            self.send_error_page(404, "Not Found", "请求的文件不存在。")
     
     def get_language_class(self, ext: str) -> str:
         lang_map = {
@@ -253,6 +294,490 @@ document.addEventListener('DOMContentLoaded', function() {{
         }
         return lang_map.get(ext, 'plaintext')
     
+    def serve_text_file(self, file_path: str):
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            rel_path = os.path.relpath(file_path, self.root_dir)
+            
+            html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(rel_path)}</title>
+<style>
+{self.get_css_styles()}
+.text-container {{
+    max-width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: #f6f8fa;
+}}
+.text-header {{
+    background: #fff;
+    padding: 10px 15px;
+    border: 1px solid #e1e4e8;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}}
+.text-header h2 {{
+    margin: 0;
+    font-size: 16px;
+    color: #24292e;
+}}
+.text-header .file-info {{
+    color: #586069;
+    font-size: 14px;
+}}
+pre {{
+    margin: 0;
+    padding: 16px;
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 0 0 6px 6px;
+    overflow-x: auto;
+}}
+code {{
+    font-family: 'Courier New', 'Monaco', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<p><a href="javascript:history.back()">← 返回</a></p>
+<div class="text-container">
+<div class="text-header">
+<h2>{html.escape(os.path.basename(file_path))}</h2>
+<span class="file-info">{html.escape(rel_path)}</span>
+</div>
+<pre><code>{html.escape(content)}</code></pre>
+</div>
+</div>
+</body>
+</html>'''
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', len(html_content.encode('utf-8')))
+            self.end_headers()
+            self.wfile.write(html_content.encode('utf-8'))
+        except IOError:
+            self.send_error_page(404, "Not Found", "请求的文件不存在。")
+    
+    def serve_unknown_file(self, file_path: str):
+        try:
+            with open(file_path, 'rb') as f:
+                sample = f.read(1000)
+            
+            non_printable = sum(1 for byte in sample if byte < 32 and byte not in (9, 10, 13))
+            non_printable_ratio = non_printable / len(sample) if sample else 0
+            
+            if non_printable_ratio > 0.1:
+                self.serve_download_prompt(file_path)
+            else:
+                try:
+                    content = sample.decode('utf-8') + (open(file_path, 'r', encoding='utf-8', errors='ignore').read()[1000:] if os.path.getsize(file_path) > 1000 else '')
+                    rel_path = os.path.relpath(file_path, self.root_dir)
+                    
+                    html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(rel_path)}</title>
+<style>
+{self.get_css_styles()}
+.text-container {{
+    max-width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: #f6f8fa;
+}}
+.text-header {{
+    background: #fff;
+    padding: 10px 15px;
+    border: 1px solid #e1e4e8;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}}
+.text-header h2 {{
+    margin: 0;
+    font-size: 16px;
+    color: #24292e;
+}}
+.text-header .file-info {{
+    color: #586069;
+    font-size: 14px;
+}}
+pre {{
+    margin: 0;
+    padding: 16px;
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 0 0 6px 6px;
+    overflow-x: auto;
+}}
+code {{
+    font-family: 'Courier New', 'Monaco', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<p><a href="javascript:history.back()">← 返回</a></p>
+<div class="text-container">
+<div class="text-header">
+<h2>{html.escape(os.path.basename(file_path))}</h2>
+<span class="file-info">{html.escape(rel_path)}</span>
+</div>
+<pre><code>{html.escape(content)}</code></pre>
+</div>
+</div>
+</body>
+</html>'''
+                    
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html; charset=utf-8')
+                    self.send_header('Content-Length', len(html_content.encode('utf-8')))
+                    self.end_headers()
+                    self.wfile.write(html_content.encode('utf-8'))
+                except:
+                    self.serve_download_prompt(file_path)
+        except IOError:
+            self.send_error_page(404, "Not Found", "请求的文件不存在。")
+    
+    def serve_download_prompt(self, file_path: str):
+        rel_path = os.path.relpath(file_path, self.root_dir)
+        file_size = os.path.getsize(file_path)
+        
+        html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(rel_path)}</title>
+<style>
+{self.get_css_styles()}
+.download-prompt {{
+    max-width: 600px;
+    margin: 100px auto;
+    padding: 40px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    text-align: center;
+}}
+.download-prompt h2 {{
+    color: #2c3e50;
+    margin-bottom: 20px;
+}}
+.download-prompt p {{
+    color: #666;
+    margin-bottom: 30px;
+}}
+.download-prompt .file-info {{
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}}
+.download-prompt .btn-group {{
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}}
+.download-prompt .btn {{
+    padding: 12px 30px;
+    font-size: 14px;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="download-prompt">
+<h2>文件预览</h2>
+<div class="file-info">
+<p><strong>{html.escape(os.path.basename(file_path))}</strong></p>
+<p>大小: {self.format_size(file_size)}</p>
+</div>
+<p>此文件可能不是纯文本文件，是否下载？</p>
+<div class="btn-group">
+<a href="{html.escape('/' + rel_path.replace(os.sep, '/'))}?raw=1" class="btn">下载文件</a>
+<a href="javascript:history.back()" class="btn btn-secondary">返回</a>
+</div>
+</div>
+</div>
+</body>
+</html>'''
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', len(html_content.encode('utf-8')))
+        self.end_headers()
+        self.wfile.write(html_content.encode('utf-8'))
+    
+    def serve_raw_file(self, file_path: str):
+        try:
+            with open(file_path, 'rb') as f:
+                content = f.read()
+            
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if mime_type is None:
+                mime_type = 'application/octet-stream'
+            
+            ext = os.path.splitext(file_path)[1].lower()
+            if mime_type.startswith('text/') or ext in TEXT_EXTENSIONS or ext in CODE_EXTENSIONS:
+                if 'charset' not in mime_type:
+                    mime_type += '; charset=utf-8'
+            
+            self.send_response(200)
+            self.send_header('Content-type', mime_type)
+            self.send_header('Content-Length', len(content))
+            self.end_headers()
+            self.wfile.write(content)
+        except IOError:
+            self.send_error_page(404, "Not Found", "请求的文件不存在。")
+    
+    def serve_markdown(self, file_path: str):
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            rel_path = os.path.relpath(file_path, self.root_dir)
+            ext = os.path.splitext(file_path)[1].lower()
+            
+            html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(rel_path)}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<style>
+{self.get_css_styles()}
+.code-container {{
+    max-width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: #f6f8fa;
+}}
+.code-header {{
+    background: #fff;
+    padding: 10px 15px;
+    border: 1px solid #e1e4e8;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}}
+.code-header h2 {{
+    margin: 0;
+    font-size: 16px;
+    color: #24292e;
+}}
+.code-header .file-info {{
+    color: #586069;
+    font-size: 14px;
+}}
+pre {{
+    margin: 0;
+    padding: 16px;
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 0 0 6px 6px;
+    overflow-x: auto;
+}}
+code {{
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}}
+.hljs {{
+    background: transparent;
+    padding: 0;
+}}
+.line-numbers {{
+    counter-reset: line;
+}}
+.line-numbers .line {{
+    counter-increment: line;
+}}
+.line-numbers .line::before {{
+    content: counter(line);
+    display: inline-block;
+    width: 3em;
+    margin-right: 1em;
+    text-align: right;
+    color: #bbb;
+    border-right: 1px solid #e1e4e8;
+    padding-right: 1em;
+    user-select: none;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<p><a href="javascript:history.back()">← 返回</a></p>
+<div class="code-container">
+<div class="code-header">
+<h2>{html.escape(os.path.basename(file_path))}</h2>
+<span class="file-info">{html.escape(rel_path)}</span>
+</div>
+<pre><code class="language-{self.get_language_class(ext)} line-numbers">{html.escape(content)}</code></pre>
+</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {{
+    hljs.highlightAll();
+    
+    var codeBlock = document.querySelector('code');
+    var lines = codeBlock.innerHTML.split('\\n');
+    var numberedLines = lines.map(function(line, index) {{
+        return '<span class="line">' + line + '</span>';
+    }});
+    codeBlock.innerHTML = numberedLines.join('\\n');
+}});
+</script>
+</body>
+</html>'''
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', len(html_content.encode('utf-8')))
+            self.end_headers()
+            self.wfile.write(html_content.encode('utf-8'))
+        except IOError:
+            self.send_error_page(404, "Not Found", "请求的文件不存在。")
+    
+    def get_language_class(self, ext: str) -> str:
+        lang_map = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.java': 'java',
+            '.c': 'c',
+            '.cpp': 'cpp',
+            '.h': 'c',
+            '.hpp': 'cpp',
+            '.cs': 'csharp',
+            '.rb': 'ruby',
+            '.go': 'go',
+            '.rs': 'rust',
+            '.swift': 'swift',
+            '.kt': 'kotlin',
+            '.scala': 'scala',
+            '.lua': 'lua',
+            '.pl': 'perl',
+            '.php': 'php',
+            '.r': 'r',
+            '.m': 'objectivec',
+            '.asm': 'x86asm',
+            '.s': 'x86asm',
+            '.vue': 'vue',
+            '.jsx': 'javascript',
+            '.tsx': 'typescript',
+            '.svelte': 'javascript',
+            '.sql': 'sql',
+            '.sh': 'bash',
+            '.bash': 'bash',
+            '.json': 'json',
+            '.xml': 'xml',
+            '.yaml': 'yaml',
+            '.yml': 'yaml',
+            '.html': 'html',
+            '.css': 'css',
+            '.toml': 'ini',
+            '.ini': 'ini',
+            '.conf': 'ini',
+            '.cfg': 'ini',
+            '.env': 'bash'
+        }
+        return lang_map.get(ext, 'plaintext')
+    
+    def send_error_page(self, code: int, title: str, message: str):
+        html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Error {code}: {html.escape(title)}</title>
+<style>
+{self.get_css_styles()}
+.error-container {{
+    max-width: 600px;
+    margin: 100px auto;
+    padding: 40px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    text-align: center;
+}}
+.error-code {{
+    font-size: 72px;
+    font-weight: bold;
+    color: #e74c3c;
+    margin-bottom: 20px;
+}}
+.error-title {{
+    font-size: 24px;
+    color: #2c3e50;
+    margin-bottom: 15px;
+}}
+.error-message {{
+    color: #666;
+    margin-bottom: 30px;
+    font-size: 16px;
+}}
+.error-actions {{
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}}
+.error-actions .btn {{
+    padding: 12px 30px;
+    font-size: 14px;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="error-container">
+<div class="error-code">{code}</div>
+<h1 class="error-title">{html.escape(title)}</h1>
+<p class="error-message">{html.escape(message)}</p>
+<div class="error-actions">
+<a href="javascript:history.back()" class="btn btn-secondary">返回上一页</a>
+<a href="/" class="btn">返回首页</a>
+</div>
+</div>
+</div>
+</body>
+</html>'''
+        
+        self.send_response(code)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', len(html_content.encode('utf-8')))
+        self.end_headers()
+        self.wfile.write(html_content.encode('utf-8'))
+    
     def serve_directory_listing(self, dir_path: str, web_path: str, sort_by: str = 'name', sort_order: str = 'asc'):
         try:
             entries = self.list_directory(dir_path, sort_by, sort_order)
@@ -264,7 +789,7 @@ document.addEventListener('DOMContentLoaded', function() {{
             self.end_headers()
             self.wfile.write(html_content.encode('utf-8'))
         except PermissionError:
-            self.send_error(403, "Permission denied")
+            self.send_error_page(403, "Permission Denied", "权限不足，无法访问此目录。")
     
     def list_directory(self, dir_path: str, sort_by: str = 'name', sort_order: str = 'asc') -> List[Tuple[str, str, int, float]]:
         entries = []
@@ -312,6 +837,8 @@ document.addEventListener('DOMContentLoaded', function() {{
                 return ' ↓' if sort_order == 'asc' else ' ↑'
             return ''
         
+        breadcrumb_html = self.generate_breadcrumb(web_path)
+        
         html_parts = [
             '<!DOCTYPE html>',
             '<html lang="zh-CN">',
@@ -325,18 +852,22 @@ document.addEventListener('DOMContentLoaded', function() {{
             '</head>',
             '<body>',
             '<div class="container">',
-            f'<h1>Index of {html.escape(web_path)}</h1>',
+            f'<div class="breadcrumb">{breadcrumb_html}</div>',
             '<div class="search-box">',
             '<form method="GET" class="search-form">',
             '<div class="search-row">',
-            '<input type="text" name="search" placeholder="文件名搜索（支持正则）" class="search-input">',
-            '<button type="submit" class="btn">搜索文件名</button>',
+            '<input type="text" name="search" placeholder="文件名搜索" class="search-input">',
+            '<label class="search-option"><input type="checkbox" name="ignore_case" value="1" checked> 忽略大小写</label>',
+            '<label class="search-option"><input type="checkbox" name="use_regex" value="1"> 正则表达式</label>',
+            '<button type="submit" class="btn search-btn">搜索文件名</button>',
             '</div>',
             '</form>',
             '<form method="GET" class="search-form">',
             '<div class="search-row">',
-            '<input type="text" name="content_search" placeholder="文件内容搜索（支持正则）" class="search-input">',
-            '<button type="submit" class="btn btn-secondary">搜索内容</button>',
+            '<input type="text" name="content_search" placeholder="文件内容搜索" class="search-input">',
+            '<label class="search-option"><input type="checkbox" name="ignore_case" value="1" checked> 忽略大小写</label>',
+            '<label class="search-option"><input type="checkbox" name="use_regex" value="1"> 正则表达式</label>',
+            '<button type="submit" class="btn btn-secondary search-btn">搜索内容</button>',
             '</div>',
             '</form>',
             '</div>',
@@ -361,14 +892,16 @@ document.addEventListener('DOMContentLoaded', function() {{
                 link_path += '/'
                 display_name = name + '/'
                 size_str = '-'
+                raw_link = ''
             else:
                 display_name = name
                 size_str = self.format_size(size)
+                raw_link = f' <a href="{html.escape(link_path)}?raw=1" class="raw-link" title="查看原始文件">📄</a>'
             
             mtime_str = self.format_time(mtime)
             
             html_parts.append(
-                f'<tr><td><a href="{html.escape(link_path)}">{html.escape(display_name)}</a></td>'
+                f'<tr><td><a href="{html.escape(link_path)}">{html.escape(display_name)}</a>{raw_link}</td>'
                 f'<td>{size_str}</td><td>{mtime_str}</td></tr>'
             )
         
@@ -395,10 +928,20 @@ document.addEventListener('DOMContentLoaded', function() {{
             )
             return
         
-        try:
-            pattern = re.compile(search_term)
-        except re.error:
-            pattern = re.compile(re.escape(search_term))
+        ignore_case = 'ignore_case' in query_params
+        use_regex = 'use_regex' in query_params
+        
+        if use_regex:
+            flags = re.IGNORECASE if ignore_case else 0
+            try:
+                pattern = re.compile(search_term, flags)
+            except re.error:
+                pattern = re.compile(re.escape(search_term), flags)
+        else:
+            if ignore_case:
+                pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+            else:
+                pattern = re.compile(re.escape(search_term))
         
         results = self.search_filenames(base_path, pattern)
         page = int(query_params.get('page', ['1'])[0])
@@ -410,7 +953,8 @@ document.addEventListener('DOMContentLoaded', function() {{
             page_size = int(page_size)
         
         html_content = self.generate_search_results_html(
-            search_term, results, page, page_size, 'filename', base_path
+            search_term, results, page, page_size, 'filename', base_path,
+            ignore_case, use_regex
         )
         
         self.send_response(200)
@@ -428,10 +972,20 @@ document.addEventListener('DOMContentLoaded', function() {{
             )
             return
         
-        try:
-            pattern = re.compile(search_term)
-        except re.error:
-            pattern = re.compile(re.escape(search_term))
+        ignore_case = 'ignore_case' in query_params
+        use_regex = 'use_regex' in query_params
+        
+        if use_regex:
+            flags = re.IGNORECASE if ignore_case else 0
+            try:
+                pattern = re.compile(search_term, flags)
+            except re.error:
+                pattern = re.compile(re.escape(search_term), flags)
+        else:
+            if ignore_case:
+                pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+            else:
+                pattern = re.compile(re.escape(search_term))
         
         results = self.search_file_contents(base_path, pattern)
         page = int(query_params.get('page', ['1'])[0])
@@ -443,7 +997,8 @@ document.addEventListener('DOMContentLoaded', function() {{
             page_size = int(page_size)
         
         html_content = self.generate_search_results_html(
-            search_term, results, page, page_size, 'content', base_path
+            search_term, results, page, page_size, 'content', base_path,
+            ignore_case, use_regex
         )
         
         self.send_response(200)
@@ -572,8 +1127,16 @@ document.addEventListener('DOMContentLoaded', function() {{
             return False
     
     def generate_search_results_html(self, search_term: str, results: List, page: int,
-                                     page_size: int, search_type: str, base_path: str) -> str:
+                                     page_size: int, search_type: str, base_path: str,
+                                     ignore_case: bool = True, use_regex: bool = False) -> str:
+        MAX_RESULTS = 5000
         total_results = len(results)
+        results_limited = total_results > MAX_RESULTS
+        
+        if results_limited:
+            results = results[:MAX_RESULTS]
+            total_results = MAX_RESULTS
+        
         total_pages = (total_results + page_size - 1) // page_size if page_size > 0 else 1
         page = max(1, min(page, total_pages))
         
@@ -582,6 +1145,29 @@ document.addEventListener('DOMContentLoaded', function() {{
         page_results = results[start_idx:end_idx]
         
         search_param = 'search' if search_type == 'filename' else 'content_search'
+        
+        def highlight_text(text: str, term: str) -> str:
+            try:
+                if use_regex:
+                    pattern_str = f'({term})'
+                else:
+                    pattern_str = f'({re.escape(term)})'
+                
+                if ignore_case:
+                    pattern = re.compile(pattern_str, re.IGNORECASE)
+                else:
+                    pattern = re.compile(pattern_str)
+                
+                escaped_text = html.escape(text)
+                return pattern.sub(r'<span class="highlight">\1</span>', escaped_text)
+            except:
+                return html.escape(text)
+        
+        pagination_html = self.generate_pagination(search_param, search_term, page, total_pages, page_size, total_results, ignore_case, use_regex)
+        
+        limit_warning = ''
+        if results_limited:
+            limit_warning = ' <span class="limit-warning">(结果已限制为 5000 条)</span>'
         
         html_parts = [
             '<!DOCTYPE html>',
@@ -596,67 +1182,42 @@ document.addEventListener('DOMContentLoaded', function() {{
             '</head>',
             '<body>',
             '<div class="container">',
-            f'<h1>搜索结果: {html.escape(search_term)}</h1>',
+            '<div class="search-header">',
+            f'<h1>搜索结果: {html.escape(search_term)}{limit_warning}</h1>',
+            f'<a href="{html.escape(base_path)}" class="back-link">返回目录</a>',
+            '</div>',
             f'<p>找到 {total_results} 个结果 (第 {page}/{total_pages} 页)</p>',
-            '<div class="page-size-selector">',
-            '每页显示: ',
         ]
         
-        for size in PAGE_SIZES:
-            if size == page_size or (size == 'all' and page_size == total_results):
-                html_parts.append(f'<span class="current-page">{size}</span> ')
-            else:
-                size_str = str(size)
-                html_parts.append(
-                    f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page=1&page_size={size_str}">{size}</a> '
-                )
-        
-        html_parts.append('</div>')
+        if total_pages > 1:
+            html_parts.append(pagination_html)
         
         if search_type == 'filename':
-            html_parts.append('<ul class="search-results">')
-            for result in page_results:
+            html_parts.append('<div class="search-results">')
+            for idx, result in enumerate(page_results, start=start_idx + 1):
                 link_path = '/' + result.replace(os.sep, '/')
+                highlighted = highlight_text(result, search_term)
                 html_parts.append(
-                    f'<li><a href="{html.escape(link_path)}">{html.escape(result)}</a></li>'
+                    f'<div class="result-item"><span class="result-number">{idx}.</span> <a href="{html.escape(link_path)}">{highlighted}</a></div>'
                 )
-            html_parts.append('</ul>')
+            html_parts.append('</div>')
         else:
             html_parts.append('<div class="content-search-results">')
-            for result in page_results:
+            for idx, result in enumerate(page_results, start=start_idx + 1):
                 link_path = '/' + result.file_path.replace(os.sep, '/')
                 html_parts.append('<div class="result-item">')
                 html_parts.append(
-                    f'<div class="result-file"><a href="{html.escape(link_path)}">{html.escape(result.file_path)}</a></div>'
+                    f'<span class="result-number">{idx}.</span> <a href="{html.escape(link_path)}">{html.escape(result.file_path)}</a>'
                 )
+                highlighted_content = highlight_text(result.line_content, search_term)
                 html_parts.append(
-                    f'<div class="result-line">Line {result.line_number}: {html.escape(result.line_content)}</div>'
+                    f'<div class="result-line">Line {result.line_number}: {highlighted_content}</div>'
                 )
                 html_parts.append('</div>')
             html_parts.append('</div>')
         
         if total_pages > 1:
-            html_parts.append('<div class="pagination">')
-            
-            if page > 1:
-                html_parts.append(
-                    f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={page-1}&page_size={page_size}">上一页</a> '
-                )
-            
-            for p in range(max(1, page - 2), min(total_pages + 1, page + 3)):
-                if p == page:
-                    html_parts.append(f'<span class="current-page">{p}</span> ')
-                else:
-                    html_parts.append(
-                        f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={p}&page_size={page_size}">{p}</a> '
-                    )
-            
-            if page < total_pages:
-                html_parts.append(
-                    f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={page+1}&page_size={page_size}">下一页</a>'
-                )
-            
-            html_parts.append('</div>')
+            html_parts.append(pagination_html)
         
         html_parts.extend([
             '<hr>',
@@ -668,12 +1229,91 @@ document.addEventListener('DOMContentLoaded', function() {{
         
         return '\n'.join(html_parts)
     
+    def generate_pagination(self, search_param: str, search_term: str, page: int, total_pages: int, page_size: int, total_results: int, ignore_case: bool = True, use_regex: bool = False) -> str:
+        extra_params = f'&ignore_case={"1" if ignore_case else "0"}&use_regex={"1" if use_regex else "0"}'
+        html_parts = ['<div class="pagination">']
+        
+        if page > 1:
+            html_parts.append(
+                f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page=1&page_size={page_size}{extra_params}">首页</a> '
+            )
+            html_parts.append(
+                f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={page-1}&page_size={page_size}{extra_params}">上一页</a> '
+            )
+        
+        start_page = max(1, page - 2)
+        end_page = min(total_pages + 1, page + 3)
+        
+        if start_page > 1:
+            html_parts.append('<span>...</span> ')
+        
+        for p in range(start_page, end_page):
+            if p == page:
+                html_parts.append(f'<span class="current-page">{p}</span> ')
+            else:
+                html_parts.append(
+                    f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={p}&page_size={page_size}{extra_params}">{p}</a> '
+                )
+        
+        if end_page < total_pages + 1:
+            html_parts.append('<span>...</span> ')
+        
+        if page < total_pages:
+            html_parts.append(
+                f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={page+1}&page_size={page_size}{extra_params}">下一页</a> '
+            )
+            html_parts.append(
+                f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page={total_pages}&page_size={page_size}{extra_params}">末页</a> '
+            )
+        
+        html_parts.append(
+            f'<span class="page-jump"><select onchange="window.location.href=\'?{search_param}={urllib.parse.quote(search_term)}&page=\'+this.value+\'&page_size={page_size}{extra_params}\'">'
+        )
+        
+        for p in range(1, total_pages + 1):
+            selected = ' selected' if p == page else ''
+            html_parts.append(f'<option value="{p}"{selected}>第 {p} 页</option>')
+        
+        html_parts.append('</select></span>')
+        
+        if total_results > 20:
+            html_parts.append('<span class="page-size-selector-inline">每页显示: ')
+            for size in PAGE_SIZES:
+                if size == 'all':
+                    if total_results > page_size:
+                        if size == page_size or (size == 'all' and page_size == total_results):
+                            html_parts.append(f'<span class="current-page">全部</span> ')
+                        else:
+                            html_parts.append(
+                                f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page=1&page_size=all{extra_params}">全部</a> '
+                            )
+                else:
+                    if total_results > size:
+                        if size == page_size:
+                            html_parts.append(f'<span class="current-page">{size}</span> ')
+                        else:
+                            html_parts.append(
+                                f'<a href="?{search_param}={urllib.parse.quote(search_term)}&page=1&page_size={size}{extra_params}">{size}</a> '
+                            )
+            html_parts.append('</span>')
+        
+        html_parts.append('</div>')
+        
+        return '\n'.join(html_parts)
+    
     def serve_markdown(self, file_path: str):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             rel_path = os.path.relpath(file_path, self.root_dir)
+            dir_path = os.path.dirname(rel_path)
+            if dir_path:
+                back_link = '/' + dir_path.replace(os.sep, '/') + '/'
+            else:
+                back_link = '/'
+            
+            processed_content = self.process_markdown_front_matter(content)
             
             html_content = f'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -683,8 +1323,8 @@ document.addEventListener('DOMContentLoaded', function() {{
 <title>{html.escape(rel_path)}</title>
 </head>
 <body>
-<p><a href="javascript:history.back()">← 返回</a></p>
-{content}
+<p><a href="{html.escape(back_link)}">← 返回目录</a></p>
+{processed_content}
 <!-- Markdeep: --><style class="fallback">body{{visibility:hidden;white-space:pre;font-family:monospace}}</style><script src="markdeep.min.js" charset="utf-8"></script><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js" charset="utf-8"></script><script>window.alreadyProcessedMarkdeep||(document.body.style.visibility="visible")</script>
 </body>
 </html>'''
@@ -695,7 +1335,40 @@ document.addEventListener('DOMContentLoaded', function() {{
             self.end_headers()
             self.wfile.write(html_content.encode('utf-8'))
         except IOError:
-            self.send_error(404, "File not found")
+            self.send_error_page(404, "Not Found", "请求的文件不存在。")
+    
+    def process_markdown_front_matter(self, content: str) -> str:
+        if not content.startswith('---'):
+            return content
+        
+        lines = content.split('\n')
+        if len(lines) < 2:
+            return content
+        
+        end_index = -1
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                end_index = i
+                break
+        
+        if end_index == -1:
+            return content
+        
+        front_matter_lines = lines[1:end_index]
+        rest_content = '\n'.join(lines[end_index + 1:])
+        
+        title = None
+        for line in front_matter_lines:
+            if line.strip().startswith('title:'):
+                title = line.split(':', 1)[1].strip().strip('"\'')
+                break
+        
+        yaml_block = '```yaml\n' + '\n'.join(front_matter_lines) + '\n```\n\n'
+        
+        if title:
+            yaml_block = f'# {title}\n\n' + yaml_block
+        
+        return yaml_block + rest_content
     
     def get_css_styles(self) -> str:
         return '''
@@ -741,6 +1414,20 @@ h1 {
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 14px;
+    min-width: 200px;
+}
+.search-option {
+    display: flex;
+    align-items: center;
+    margin: 0 10px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+.search-option input {
+    margin-right: 5px;
+}
+.search-btn {
+    min-width: 120px;
 }
 .btn {
     padding: 10px 20px;
@@ -791,6 +1478,15 @@ h1 {
 }
 .file-list a:hover {
     text-decoration: underline;
+}
+.raw-link {
+    font-size: 16px;
+    margin-left: 8px;
+    opacity: 0.6;
+    text-decoration: none;
+}
+.raw-link:hover {
+    opacity: 1;
 }
 .search-results {
     list-style: none;
@@ -858,6 +1554,41 @@ h1 {
     color: white;
     border-color: #3498db;
 }
+.page-jump {
+    margin-left: 10px;
+    padding: 0 10px;
+}
+.page-jump select {
+    padding: 5px 10px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    background: white;
+    cursor: pointer;
+    font-size: 14px;
+}
+.page-size-selector-inline {
+    margin-left: 20px;
+    padding-left: 20px;
+    border-left: 1px solid #ddd;
+}
+.page-size-selector-inline a,
+.page-size-selector-inline span {
+    display: inline-block;
+    padding: 8px 12px;
+    margin: 0 2px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    text-decoration: none;
+    color: #3498db;
+}
+.page-size-selector-inline a:hover {
+    background: #e9ecef;
+}
+.page-size-selector-inline .current-page {
+    background: #3498db;
+    color: white;
+    border-color: #3498db;
+}
 .page-size-selector {
     margin: 15px 0;
     padding: 10px;
@@ -880,6 +1611,61 @@ h1 {
     background: #3498db;
     color: white;
     border-color: #3498db;
+}
+.breadcrumb {
+    padding: 15px 0;
+    margin-bottom: 20px;
+    font-size: 16px;
+    color: #666;
+}
+.breadcrumb a {
+    color: #3498db;
+    text-decoration: none;
+}
+.breadcrumb a:hover {
+    text-decoration: underline;
+}
+.breadcrumb-separator {
+    color: #999;
+    margin: 0 8px;
+}
+.breadcrumb-current {
+    color: #2c3e50;
+    font-weight: 600;
+}
+.highlight {
+    background-color: #fff3cd;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+.search-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+.search-header h1 {
+    margin: 0;
+    border: none;
+    padding: 0;
+}
+.back-link {
+    color: #3498db;
+    text-decoration: none;
+    font-size: 14px;
+}
+.back-link:hover {
+    text-decoration: underline;
+}
+.limit-warning {
+    color: #e67e22;
+    font-size: 14px;
+    font-weight: normal;
+}
+.result-number {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 5px;
 }
 .footer {
     margin-top: 30px;
@@ -906,7 +1692,7 @@ hr {
     def format_time(self, timestamp: float) -> str:
         from datetime import datetime
         dt = datetime.fromtimestamp(timestamp)
-        return dt.strftime('%Y-%m-%d %H:%M')
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
