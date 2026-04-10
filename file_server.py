@@ -1581,6 +1581,7 @@ document.addEventListener('DOMContentLoaded', function() {{
                 back_link = '/'
             
             processed_content = self.process_markdown_front_matter(content)
+            processed_content = self.process_mermaid_blocks(processed_content)
             
             html_content = f'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1593,6 +1594,8 @@ document.addEventListener('DOMContentLoaded', function() {{
 <p><a href="{html.escape(back_link)}">← 返回目录</a></p>
 {processed_content}
 <!-- Markdeep: --><style class="fallback">body{{visibility:hidden;white-space:pre;font-family:monospace}}</style><script src="markdeep.min.js" charset="utf-8"></script><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js" charset="utf-8"></script><script>window.alreadyProcessedMarkdeep||(document.body.style.visibility="visible")</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{startOnLoad:true,theme:'default'}});</script>
 </body>
 </html>'''
             
@@ -1636,6 +1639,14 @@ document.addEventListener('DOMContentLoaded', function() {{
             yaml_block = f'# {title}\n\n' + yaml_block
         
         return yaml_block + rest_content
+    
+    def process_mermaid_blocks(self, content: str) -> str:
+        def replace_mermaid(match):
+            mermaid_code = match.group(1)
+            return f'<pre class="mermaid">\n{mermaid_code}\n</pre>'
+        
+        pattern = r'```mermaid\s*\n(.*?)```'
+        return re.sub(pattern, replace_mermaid, content, flags=re.DOTALL)
     
     def get_css_styles(self) -> str:
         return '''
