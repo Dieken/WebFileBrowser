@@ -29,6 +29,20 @@ ROOT_DIR = os.getcwd()
 DEFAULT_PAGE_SIZE = 20
 PAGE_SIZES = [20, 50, 100, 'all']
 
+def decode_text(data: bytes) -> str:
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        return data.decode('gb18030', errors='replace')
+
+def read_file_with_fallback(file_path: str) -> str:
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        with open(file_path, 'r', encoding='gb18030', errors='replace') as f:
+            return f.read()
+
 AUTH_ENABLED = False
 USERNAME = None
 PASSWORD = None
@@ -390,8 +404,7 @@ class FileServerHandler(http.server.SimpleHTTPRequestHandler):
     
     def serve_code_file(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
+            content = read_file_with_fallback(file_path)
             
             rel_path = os.path.relpath(file_path, self.root_dir)
             ext = os.path.splitext(file_path)[1].lower()
@@ -548,8 +561,7 @@ document.addEventListener('DOMContentLoaded', function() {{
     
     def serve_text_file(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
+            content = read_file_with_fallback(file_path)
             
             rel_path = os.path.relpath(file_path, self.root_dir)
             
@@ -637,7 +649,7 @@ code {{
                 self.serve_download_prompt(file_path)
             else:
                 try:
-                    content = sample.decode('utf-8') + (open(file_path, 'r', encoding='utf-8', errors='replace').read()[1000:] if os.path.getsize(file_path) > 1000 else '')
+                    content = read_file_with_fallback(file_path)
                     rel_path = os.path.relpath(file_path, self.root_dir)
                     
                     html_content = f'''<!DOCTYPE html>
@@ -808,8 +820,7 @@ code {{
     
     def serve_markdown(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
+            content = read_file_with_fallback(file_path)
             
             rel_path = os.path.relpath(file_path, self.root_dir)
             ext = os.path.splitext(file_path)[1].lower()
@@ -1307,9 +1318,10 @@ document.addEventListener('DOMContentLoaded', function() {{
             if pattern.flags & re.IGNORECASE:
                 cmd.append('-i')
             cmd.extend([pattern.pattern, search_dir])
-            proc = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+            proc = subprocess.run(cmd, capture_output=True, timeout=30)
+            stdout = decode_text(proc.stdout)
             
-            for line in proc.stdout.split('\n'):
+            for line in stdout.split('\n'):
                 if not line:
                     continue
                 
@@ -1338,9 +1350,10 @@ document.addEventListener('DOMContentLoaded', function() {{
             if pattern.flags & re.IGNORECASE:
                 cmd.append('-i')
             cmd.extend([pattern.pattern, search_dir])
-            proc = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+            proc = subprocess.run(cmd, capture_output=True, timeout=30)
+            stdout = decode_text(proc.stdout)
             
-            for line in proc.stdout.split('\n'):
+            for line in stdout.split('\n'):
                 if not line:
                     continue
                 
@@ -1374,20 +1387,20 @@ document.addEventListener('DOMContentLoaded', function() {{
                     continue
                 
                 try:
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        for line_num, line in enumerate(f, 1):
-                            if pattern.search(line):
-                                rel_path = os.path.relpath(file_path, self.root_dir)
-                                match = pattern.search(line)
-                                
-                                results.append(SearchResult(
-                                    file_path=rel_path,
-                                    line_number=line_num,
-                                    line_content=line.rstrip('\n\r'),
-                                    match_start=match.start() if match else 0,
-                                    match_end=match.end() if match else len(line)
-                                ))
-                except (IOError, OSError):
+                    content = read_file_with_fallback(file_path)
+                    for line_num, line in enumerate(content.split('\n'), 1):
+                        if pattern.search(line):
+                            rel_path = os.path.relpath(file_path, self.root_dir)
+                            match = pattern.search(line)
+                            
+                            results.append(SearchResult(
+                                file_path=rel_path,
+                                line_number=line_num,
+                                line_content=line.rstrip('\r'),
+                                match_start=match.start() if match else 0,
+                                match_end=match.end() if match else len(line)
+                            ))
+                except (IOError, OSError, UnicodeDecodeError):
                     continue
         
         return results
