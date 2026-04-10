@@ -44,6 +44,13 @@
 - 美观的 UI 设计
 - 无外部依赖，仅使用 Python 标准库
 
+### 🔐 身份认证
+- 支持 HTTP Basic Auth 和 Cookie 两种认证方式
+- Cookie 认证使用 HMAC-SHA256 签名，安全可靠
+- 可配置会话时长（1小时、8小时、1天、1周、30天）
+- 登录页面支持显示当前访问 URL
+- 页面右上角显示用户名、到期时间和注销按钮
+
 ## 安装
 
 无需安装，只需 Python 3.6+ 即可运行。
@@ -81,11 +88,56 @@ python3 file_server.py -p 9000 --host 0.0.0.0 -d /path/to/directory
 | `-p, --port` | 端口号 | 8000 |
 | `--host` | 监听地址 | 127.0.0.1 (localhost) |
 | `-d, --directory` | 服务目录 | 当前目录 |
+| `--username` | 用户名（开启认证） | 无 |
+| `--password` | 密码（或设置环境变量 PASSWORD） | 无 |
 
 ### 监听地址说明
 
 - **127.0.0.1** (默认)：仅本机访问，最安全
 - **0.0.0.0**：监听所有网络接口，允许局域网或外网访问（需注意安全）
+
+### 身份认证
+
+#### 启用认证
+
+```bash
+# 方式1：命令行指定用户名和密码
+python3 file_server.py --username admin --password secret
+
+# 方式2：从环境变量获取密码
+export PASSWORD=secret
+python3 file_server.py --username admin
+
+# 方式3：启动时输入密码（输入时不显示）
+python3 file_server.py --username admin
+# Enter password: (输入密码)
+```
+
+#### 认证方式
+
+1. **HTTP Basic Auth**：在请求头添加 `Authorization: Basic base64(username:password)`
+   - 适用于 API 调用和自动化脚本
+   - 无过期时间，每次请求都需要携带
+
+2. **Cookie 认证**：通过登录页面获取 Cookie
+   - 适用于浏览器访问
+   - 支持可配置的会话时长
+   - Cookie 格式：`user=xxx&expire=YYYYmmdd-HHMMSS&rand=xxx&sig=SIGNATURE`
+   - 签名使用 HMAC-SHA256，以密码为密钥
+
+#### 登录页面
+
+- 显示当前访问的 URL
+- 用户名和密码输入框
+- 会话时长选择：1小时、8小时、1天、1周、30天
+- 登录成功后自动跳转到原 URL
+
+#### 用户信息栏
+
+认证成功后，页面右上角显示：
+- 用户名
+- 到期时间（Cookie 认证显示具体时间，Basic Auth 显示 "--"）
+- 注销按钮（点击后清除 Cookie 并重新登录）
 
 ## 功能详解
 
@@ -154,6 +206,9 @@ python3 file_server.py -d ~/Documents
 
 # 在端口 3000 启动，允许局域网访问
 python3 file_server.py -p 3000 --host 0.0.0.0
+
+# 启用认证，允许局域网访问
+python3 file_server.py --host 0.0.0.0 --username admin --password secret
 ```
 
 ### 访问服务器
@@ -170,8 +225,10 @@ python3 file_server.py -p 3000 --host 0.0.0.0
 
 1. **默认监听 localhost**：默认配置仅允许本机访问，最安全
 2. **谨慎使用 0.0.0.0**：监听所有接口会暴露服务，确保在可信网络中使用
-3. **不要暴露到公网**：此服务器仅用于本地开发，不建议暴露到公网
-4. **路径安全**：已实现路径检查，防止目录遍历攻击
+3. **启用认证**：如果需要暴露到网络，强烈建议启用身份认证
+4. **不要暴露到公网**：此服务器仅用于本地开发，不建议暴露到公网
+5. **路径安全**：已实现路径检查，防止目录遍历攻击
+6. **Cookie 安全**：Cookie 设置了 HttpOnly 标志，防止 XSS 攻击窃取
 
 ## 技术栈
 
