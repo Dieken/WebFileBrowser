@@ -15,12 +15,22 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 import shutil
 import mimetypes
+import hmac
+import hashlib
+import base64
+import time
+import secrets
+from datetime import datetime, timedelta
 
 PORT = 8000
 HOST = '127.0.0.1'
 ROOT_DIR = os.getcwd()
 DEFAULT_PAGE_SIZE = 20
 PAGE_SIZES = [20, 50, 100, 'all']
+
+AUTH_ENABLED = False
+USERNAME = None
+PASSWORD = None
 
 TEXT_EXTENSIONS = {
     '.txt', '.md', '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.hpp',
@@ -67,9 +77,250 @@ class FileServerHandler(http.server.SimpleHTTPRequestHandler):
         self.root_dir = ROOT_DIR
         super().__init__(*args, directory=ROOT_DIR, **kwargs)
     
+    def check_auth(self) -> tuple:
+        if not AUTH_ENABLED:
+            return (True, None)
+        
+        auth_header = self.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Basic '):
+            try:
+                encoded_credentials = auth_header[6:]
+                decoded = base64.b64decode(encoded_credentials).decode('utf-8')
+                username, password = decoded.split(':', 1)
+                if username == USERNAME and password == PASSWORD:
+                    return (True, {'user': username, 'expire': None})
+            except:
+                pass
+        
+        cookie = self.headers.get('Cookie')
+        if cookie:
+            result = self.verify_cookie(cookie)
+            if result:
+                return (True, result)
+        
+        return (False, None)
+    
+    def verify_cookie(self, cookie_str: str) -> dict:
+        cookies = {}
+        for part in cookie_str.split(';'):
+            part = part.strip()
+            if '=' in part:
+                key, value = part.split('=', 1)
+                cookies[key.strip()] = value.strip()
+        
+        auth_cookie = cookies.get('auth')
+        if not auth_cookie:
+            return None
+        
+        try:
+            params = {}
+            for pair in auth_cookie.split('&'):
+                if '=' in pair:
+                    key, value = pair.split('=', 1)
+                    params[key] = value
+            
+            user = params.get('user')
+            expire_str = params.get('expire')
+            rand = params.get('rand')
+            sig = params.get('sig')
+            
+            if not all([user, expire_str, rand, sig]):
+                return None
+            
+            if user != USERNAME:
+                return None
+            
+            expire_time = datetime.strptime(expire_str, '%Y%m%d-%H%M%S')
+            if datetime.now() > expire_time:
+                return None
+            
+            data_to_sign = f'user={user}&expire={expire_str}&rand={rand}'
+            expected_sig = hmac.new(
+                PASSWORD.encode('utf-8'),
+                data_to_sign.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+            
+            if not hmac.compare_digest(sig, expected_sig):
+                return None
+            
+            return {'user': user, 'expire': expire_str}
+        except:
+            return None
+    
+    def generate_cookie(self, duration_minutes: int) -> str:
+        expire_time = datetime.now() + timedelta(minutes=duration_minutes)
+        expire_str = expire_time.strftime('%Y%m%d-%H%M%S')
+        rand = secrets.token_hex(16)
+        
+        data_to_sign = f'user={USERNAME}&expire={expire_str}&rand={rand}'
+        sig = hmac.new(
+            PASSWORD.encode('utf-8'),
+            data_to_sign.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        return f'{data_to_sign}&sig={sig}'
+    
+    def serve_login_page(self, error_msg: str = ''):
+        current_url = urllib.parse.unquote(self.path)
+        
+        html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录</title>
+<style>
+{self.get_css_styles()}
+.login-container {{
+    max-width: 400px;
+    margin: 100px auto;
+    padding: 40px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}}
+.login-container h2 {{
+    text-align: center;
+    color: #2c3e50;
+    margin-bottom: 30px;
+}}
+.login-form {{
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}}
+.form-group {{
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}}
+.form-group label {{
+    font-weight: 600;
+    color: #333;
+}}
+.form-group input, .form-group select {{
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}}
+.form-group input:focus, .form-group select:focus {{
+    outline: none;
+    border-color: #3498db;
+}}
+.error-msg {{
+    color: #e74c3c;
+    background: #fdf2f2;
+    padding: 10px;
+    border-radius: 4px;
+    text-align: center;
+}}
+.btn-login {{
+    padding: 12px;
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+    margin-top: 10px;
+}}
+.btn-login:hover {{
+    background: #2980b9;
+}}
+.current-url {{
+    text-align: center;
+    color: #666;
+    font-size: 13px;
+    margin-top: 20px;
+    word-break: break-all;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="login-container">
+<h2>身份验证</h2>
+{'<div class="error-msg">' + html.escape(error_msg) + '</div>' if error_msg else ''}
+<form method="POST" class="login-form">
+<input type="hidden" name="redirect" value="{html.escape(current_url)}">
+<div class="form-group">
+<label for="username">用户名</label>
+<input type="text" id="username" name="username" required autofocus>
+</div>
+<div class="form-group">
+<label for="password">密码</label>
+<input type="password" id="password" name="password" required>
+</div>
+<div class="form-group">
+<label for="duration">会话时长</label>
+<select id="duration" name="duration">
+<option value="60">1 小时</option>
+<option value="480">8 小时</option>
+<option value="1440">1 天</option>
+<option value="10080">1 周</option>
+<option value="43200">30 天</option>
+</select>
+</div>
+<button type="submit" class="btn-login">登录</button>
+</form>
+<p class="current-url">访问地址: {html.escape(current_url)}</p>
+</div>
+</div>
+</body>
+</html>'''
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', len(html_content.encode('utf-8')))
+        self.end_headers()
+        self.wfile.write(html_content.encode('utf-8'))
+    
+    def do_POST(self):
+        if not AUTH_ENABLED:
+            self.send_error_page(405, "Method Not Allowed", "POST 方法不被允许。")
+            return
+        
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length).decode('utf-8')
+        params = urllib.parse.parse_qs(post_data)
+        
+        username = params.get('username', [''])[0]
+        password = params.get('password', [''])[0]
+        duration = int(params.get('duration', ['60'])[0])
+        redirect = params.get('redirect', ['/'])[0]
+        
+        if username == USERNAME and password == PASSWORD:
+            cookie_value = self.generate_cookie(duration)
+            self.send_response(302)
+            self.send_header('Location', redirect)
+            self.send_header('Set-Cookie', f'auth={cookie_value}; Path=/; HttpOnly')
+            self.end_headers()
+        else:
+            self.serve_login_page('用户名或密码错误')
+    
+    def handle_logout(self, current_path: str):
+        self.send_response(302)
+        self.send_header('Location', current_path)
+        self.send_header('Set-Cookie', 'auth=; Path=/; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
+        self.end_headers()
+    
     def do_GET(self):
+        auth_result = self.check_auth()
+        if AUTH_ENABLED and not auth_result[0]:
+            self.serve_login_page()
+            return
+        
+        self.auth_info = auth_result[1]
+        
         parsed_path = urllib.parse.urlparse(self.path)
         query_params = urllib.parse.parse_qs(parsed_path.query)
+        
+        if 'logout' in query_params:
+            self.handle_logout(parsed_path.path)
+            return
         
         if 'search' in query_params:
             self.handle_search(query_params, parsed_path.path)
@@ -839,6 +1090,21 @@ document.addEventListener('DOMContentLoaded', function() {{
         
         breadcrumb_html = self.generate_breadcrumb(web_path)
         
+        user_info_html = ''
+        if AUTH_ENABLED and hasattr(self, 'auth_info') and self.auth_info:
+            user = self.auth_info.get('user', '')
+            expire = self.auth_info.get('expire', '')
+            if expire:
+                expire_display = f'{expire[:4]}-{expire[4:6]}-{expire[6:8]} {expire[9:11]}:{expire[11:13]}:{expire[13:15]}'
+            else:
+                expire_display = '--'
+            logout_url = f'{web_path}?logout=1'
+            user_info_html = f'''<div class="user-info-bar">
+<span class="user-name">👤 {html.escape(user)}</span>
+<span class="user-expire">到期: {expire_display}</span>
+<a href="{html.escape(logout_url)}" class="logout-btn">注销</a>
+</div>'''
+        
         html_parts = [
             '<!DOCTYPE html>',
             '<html lang="zh-CN">',
@@ -852,6 +1118,7 @@ document.addEventListener('DOMContentLoaded', function() {{
             '</head>',
             '<body>',
             '<div class="container">',
+            user_info_html,
             f'<div class="breadcrumb">{breadcrumb_html}</div>',
             '<div class="search-box">',
             '<form method="GET" class="search-form">',
@@ -1680,6 +1947,35 @@ hr {
     border-top: 1px solid #ddd;
     margin: 20px 0;
 }
+.user-info-bar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 20px;
+    padding: 10px 15px;
+    background: #f8f9fa;
+    border-radius: 5px;
+    margin-bottom: 15px;
+    font-size: 14px;
+}
+.user-name {
+    font-weight: 600;
+    color: #2c3e50;
+}
+.user-expire {
+    color: #666;
+}
+.logout-btn {
+    padding: 5px 15px;
+    background: #e74c3c;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.logout-btn:hover {
+    background: #c0392b;
+}
 '''
     
     def format_size(self, size: int) -> str:
@@ -1702,7 +1998,8 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 def main():
     import argparse
-    global ROOT_DIR, PORT, HOST
+    import getpass
+    global ROOT_DIR, PORT, HOST, AUTH_ENABLED, USERNAME, PASSWORD
     
     parser = argparse.ArgumentParser(description='HTTP File Server with directory listing and search')
     parser.add_argument('-p', '--port', type=int, default=PORT, help=f'Port number (default: {PORT})')
@@ -1710,8 +2007,19 @@ def main():
                         help=f'Host address to bind (default: {HOST}, use 0.0.0.0 for all interfaces)')
     parser.add_argument('-d', '--directory', type=str, default=os.getcwd(),
                         help='Root directory to serve (default: current directory)')
+    parser.add_argument('--username', type=str, help='Username for authentication')
+    parser.add_argument('--password', type=str, help='Password for authentication (or set PASSWORD env var)')
     
     args = parser.parse_args()
+    
+    if args.username:
+        AUTH_ENABLED = True
+        USERNAME = args.username
+        PASSWORD = args.password or os.environ.get('PASSWORD', '')
+        
+        if not PASSWORD:
+            PASSWORD = getpass.getpass('Enter password: ')
+    
     ROOT_DIR = os.path.abspath(args.directory)
     PORT = args.port
     HOST = args.host
@@ -1720,6 +2028,8 @@ def main():
     
     with ThreadedTCPServer((HOST, PORT), FileServerHandler) as httpd:
         print(f"Serving directory: {ROOT_DIR}")
+        if AUTH_ENABLED:
+            print(f"Authentication enabled for user: {USERNAME}")
         if HOST == '0.0.0.0':
             print(f"Server running at: http://localhost:{PORT}/ (listening on all interfaces)")
         else:
