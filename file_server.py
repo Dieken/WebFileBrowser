@@ -20,6 +20,7 @@ import hashlib
 import base64
 import time
 import secrets
+import traceback
 from datetime import datetime, timedelta
 
 PORT = 8000
@@ -389,7 +390,7 @@ class FileServerHandler(http.server.SimpleHTTPRequestHandler):
     
     def serve_code_file(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
             
             rel_path = os.path.relpath(file_path, self.root_dir)
@@ -547,7 +548,7 @@ document.addEventListener('DOMContentLoaded', function() {{
     
     def serve_text_file(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
             
             rel_path = os.path.relpath(file_path, self.root_dir)
@@ -636,7 +637,7 @@ code {{
                 self.serve_download_prompt(file_path)
             else:
                 try:
-                    content = sample.decode('utf-8') + (open(file_path, 'r', encoding='utf-8', errors='ignore').read()[1000:] if os.path.getsize(file_path) > 1000 else '')
+                    content = sample.decode('utf-8') + (open(file_path, 'r', encoding='utf-8', errors='replace').read()[1000:] if os.path.getsize(file_path) > 1000 else '')
                     rel_path = os.path.relpath(file_path, self.root_dir)
                     
                     html_content = f'''<!DOCTYPE html>
@@ -807,7 +808,7 @@ code {{
     
     def serve_markdown(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
             
             rel_path = os.path.relpath(file_path, self.root_dir)
@@ -1302,8 +1303,11 @@ document.addEventListener('DOMContentLoaded', function() {{
     def search_with_ripgrep(self, search_dir: str, pattern: re.Pattern) -> List[SearchResult]:
         results = []
         try:
-            cmd = ['rg', '-n', '--no-heading', '--with-filename', pattern.pattern, search_dir]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            cmd = ['rg', '-n', '--no-heading', '--with-filename']
+            if pattern.flags & re.IGNORECASE:
+                cmd.append('-i')
+            cmd.extend([pattern.pattern, search_dir])
+            proc = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=30)
             
             for line in proc.stdout.split('\n'):
                 if not line:
@@ -1321,16 +1325,20 @@ document.addEventListener('DOMContentLoaded', function() {{
                         match_start=0,
                         match_end=len(content)
                     ))
-        except (subprocess.TimeoutExpired, Exception):
-            pass
+        except (subprocess.TimeoutExpired, Exception) as e:
+            print(f"[search_with_ripgrep] Error: {e}")
+            traceback.print_exc()
         
         return results
     
     def search_with_grep(self, search_dir: str, pattern: re.Pattern) -> List[SearchResult]:
         results = []
         try:
-            cmd = ['grep', '-r', '-n', '-E', pattern.pattern, search_dir]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            cmd = ['grep', '-r', '-n', '-E']
+            if pattern.flags & re.IGNORECASE:
+                cmd.append('-i')
+            cmd.extend([pattern.pattern, search_dir])
+            proc = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=30)
             
             for line in proc.stdout.split('\n'):
                 if not line:
@@ -1348,8 +1356,9 @@ document.addEventListener('DOMContentLoaded', function() {{
                         match_start=0,
                         match_end=len(content)
                     ))
-        except (subprocess.TimeoutExpired, Exception):
-            pass
+        except (subprocess.TimeoutExpired, Exception) as e:
+            print(f"[search_with_grep] Error: {e}")
+            traceback.print_exc()
         
         return results
     
@@ -1365,7 +1374,7 @@ document.addEventListener('DOMContentLoaded', function() {{
                     continue
                 
                 try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                         for line_num, line in enumerate(f, 1):
                             if pattern.search(line):
                                 rel_path = os.path.relpath(file_path, self.root_dir)
@@ -1390,7 +1399,8 @@ document.addEventListener('DOMContentLoaded', function() {{
                 if b'\x00' in chunk:
                     return False
             return True
-        except:
+        except Exception as e:
+            print(f"[is_text_file] Error checking {file_path}: {e}")
             return False
     
     def generate_search_results_html(self, search_term: str, results: List, page: int,
