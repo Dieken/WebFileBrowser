@@ -1665,7 +1665,8 @@ document.addEventListener('DOMContentLoaded', function() {{
     
     def process_mermaid_blocks(self, content: str) -> str:
         def replace_mermaid(match):
-            mermaid_code = match.group(1)
+            # Markdeep unescapes once, so we double escape
+            mermaid_code = html.escape(html.escape(match.group(1)))
             return f'<pre class="mermaid">\n{mermaid_code}\n</pre>'
         
         pattern = r'```mermaid\s*\n(.*?)```'
