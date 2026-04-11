@@ -90,6 +90,7 @@ python3 file_server.py -p 9000 --host 0.0.0.0 -d /path/to/directory
 | `-d, --directory` | 服务目录 | 当前目录 |
 | `--username` | 用户名（开启认证） | 无 |
 | `--password` | 密码（或设置环境变量 PASSWORD） | 无 |
+| `--theme` | Markdeep 主题（用于 .md 文件渲染） | default |
 
 ### 监听地址说明
 
@@ -178,6 +179,37 @@ python3 file_server.py --username admin
 - 数学公式
 - 图表
 - 目录
+
+### Markdeep 主题
+
+通过 `--theme` 参数可以为 Markdown 文件指定不同的 Markdeep 主题：
+
+```bash
+# 使用 slate 主题（深色主题）
+python3 file_server.py --theme slate
+
+# 使用 latex 主题（类似 LaTeX 论文风格）
+python3 file_server.py --theme latex
+
+# 使用本地 CSS 文件作为主题
+python3 file_server.py --theme /path/to/custom.css
+```
+
+#### 可用主题
+
+| 主题名称 | 说明 |
+|---------|------|
+| `default` | 默认主题，无额外样式 |
+| `api` | API 文档风格 |
+| `apidoc` | API 文档风格（另一种） |
+| `dark` | 深色主题（另一种） |
+| `journal` | 期刊论文风格 |
+| `latex` | LaTeX 论文风格 |
+| `slate` | 深色主题，适合夜间阅读 |
+| `slide` | 幻灯片风格 |
+| `website` | 网站风格 |
+| `whitepaper` | 白皮书风格，适合正式文档 |
+| `PATH` | 本地 CSS 文件路径（自定义主题） |
 
 ### 代码文件
 

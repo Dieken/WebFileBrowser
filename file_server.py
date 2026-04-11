@@ -11,14 +11,12 @@ import re
 import subprocess
 import urllib.parse
 import html
-from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 import shutil
 import mimetypes
 import hmac
 import hashlib
 import base64
-import time
 import secrets
 import traceback
 from datetime import datetime, timedelta
@@ -28,12 +26,67 @@ HOST = '127.0.0.1'
 ROOT_DIR = os.getcwd()
 DEFAULT_PAGE_SIZE = 20
 PAGE_SIZES = [20, 50, 100, 'all']
+THEME = 'default'
+THEME_STYLESHEET_TAG = ''
+
+THEME_STYLESHEETS = {
+    'default': None,
+    'api': 'https://casual-effects.com/markdeep/templates/company/api/company-api.css',
+    'apidoc': 'https://casual-effects.com/markdeep/latest/apidoc.css',
+    'dark': 'https://casual-effects.com/markdeep/latest/dark.css',
+    'journal': 'https://casual-effects.com/markdeep/latest/journal.css',
+    'latex': 'https://morgan3d.github.io/markdeep/latest/latex.css',
+    'slate': 'https://casual-effects.com/markdeep/latest/slate.css',
+    'slide': 'https://casual-effects.com/markdeep/latest/slides.css',
+    'website': 'https://casual-effects.com/markdeep/latest/website.css',
+    'whitepaper': 'https://casual-effects.com/markdeep/templates/company/whitepaper/company-whitepaper.css',
+}
 
 def decode_text(data: bytes) -> str:
     try:
         return data.decode('utf-8')
     except UnicodeDecodeError:
         return data.decode('gb18030', errors='replace')
+
+def init_theme_stylesheet():
+    global THEME_STYLESHEET_TAG
+    
+    if THEME == 'default':
+        THEME_STYLESHEET_TAG = ''
+        return
+    
+    if THEME in THEME_STYLESHEETS:
+        stylesheet_url = THEME_STYLESHEETS[THEME]
+        if stylesheet_url:
+            THEME_STYLESHEET_TAG = f'<link rel="stylesheet" href="{stylesheet_url}">\n'
+        else:
+            THEME_STYLESHEET_TAG = ''
+        return
+    
+    theme_path = THEME
+    if os.path.isabs(theme_path):
+        if os.path.isfile(theme_path):
+            try:
+                rel_path = os.path.relpath(theme_path, ROOT_DIR).replace(os.sep, "/")
+                if rel_path.startswith(".."):
+                    print(f"Warning: Theme '{THEME}' is outside the root directory. Using default theme.")
+                    THEME_STYLESHEET_TAG = ''
+                    return
+                THEME_STYLESHEET_TAG = f'<link rel="stylesheet" href="/{html.escape(rel_path)}">\n'
+                return
+            except ValueError:
+                print(f"Warning: Theme '{THEME}' is on a different drive. Using default theme.")
+                THEME_STYLESHEET_TAG = ''
+                return
+    else:
+        root_theme_path = os.path.join(ROOT_DIR, theme_path)
+        if os.path.isfile(root_theme_path):
+            rel_path = theme_path.replace(os.sep, "/")
+            THEME_STYLESHEET_TAG = f'<link rel="stylesheet" href="/{html.escape(rel_path)}">\n'
+            return
+    
+    print(f"Warning: Theme '{THEME}' is not a built-in theme and is not a valid file path in root directory. Using default theme.")
+    THEME_STYLESHEET_TAG = ''
 
 def read_file_with_fallback(file_path: str) -> str:
     try:
@@ -1612,11 +1665,11 @@ document.addEventListener('DOMContentLoaded', function() {{
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{html.escape(rel_path)}</title>
-</head>
+{THEME_STYLESHEET_TAG}</head>
 <body>
 <p><a href="{html.escape(back_link)}">← 返回目录</a></p>
 {processed_content}
-<!-- Markdeep: --><style class="fallback">body{{visibility:hidden;white-space:pre;font-family:monospace}}</style><script src="markdeep.min.js" charset="utf-8"></script><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js" charset="utf-8"></script><script>window.alreadyProcessedMarkdeep||(document.body.style.visibility="visible")</script>
+<!-- Markdeep: --><style class="fallback">body{{visibility:hidden;white-space:pre;font-family:monospace}}</style><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js" charset="utf-8"></script><script>window.alreadyProcessedMarkdeep||(document.body.style.visibility="visible")</script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
 <script>mermaid.initialize({{startOnLoad:true,theme:'default'}});</script>
 </body>
@@ -2034,7 +2087,7 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 def main():
     import argparse
     import getpass
-    global ROOT_DIR, PORT, HOST, AUTH_ENABLED, USERNAME, PASSWORD
+    global ROOT_DIR, PORT, HOST, AUTH_ENABLED, USERNAME, PASSWORD, THEME
     
     parser = argparse.ArgumentParser(description='HTTP File Server with directory listing and search')
     parser.add_argument('-p', '--port', type=int, default=PORT, help=f'Port number (default: {PORT})')
@@ -2044,6 +2097,8 @@ def main():
                         help='Root directory to serve (default: current directory)')
     parser.add_argument('--username', type=str, help='Username for authentication')
     parser.add_argument('--password', type=str, help='Password for authentication (or set PASSWORD env var)')
+    parser.add_argument('--theme', type=str, default='default',
+                        help='Markdeep theme for .md files (default: default). Built-in themes: default, api, apidoc, dark, journal, latex, slate, slide, website, whitepaper. Can also be a path to local CSS file.')
     
     args = parser.parse_args()
     
@@ -2058,7 +2113,10 @@ def main():
     ROOT_DIR = os.path.abspath(args.directory)
     PORT = args.port
     HOST = args.host
+    THEME = args.theme
     
+    init_theme_stylesheet()
+
     os.chdir(ROOT_DIR)
     
     with ThreadedTCPServer((HOST, PORT), FileServerHandler) as httpd:
